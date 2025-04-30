@@ -31,6 +31,8 @@ services:
     depends_on:
       - qdrant
         # condition: service_healthy
+    env_file:
+      - .env
     environment:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
