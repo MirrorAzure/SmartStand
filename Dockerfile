@@ -1,20 +1,13 @@
-FROM python:3.11-slim
+FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    make \
-    libc-dev \
-    python3.11-dev
+RUN apt-get update -y && apt-get install -y python3-pip
 
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY src/ ./src/
-COPY scripts/ ./scripts/
-COPY docker-entrypoint.sh .
+COPY test-voice.py .
 
-RUN chmod +x scripts/init_qdrant.py
+ENTRYPOINT [ "python3", "-m", "test-voice" ]
