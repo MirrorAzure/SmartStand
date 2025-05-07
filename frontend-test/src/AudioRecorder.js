@@ -31,11 +31,17 @@ const AudioRecorder = () => {
 
     useEffect(() => {
         if (ws) {
-            navigator.mediaDevices.getUserMedia({ audio: true })
+            navigator.mediaDevices.getUserMedia({
+                audio: {
+                    autoGainControl: false,
+                    // noiseSuppression: false,
+                    // echoCancellation: false,
+                },
+            })
                 .then(stream => {
                     const audioContext = new AudioContext({ sampleRate: 16000 });
                     const source = audioContext.createMediaStreamSource(stream);
-                    const processor = audioContext.createScriptProcessor(2048, 1, 1);
+                    const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
                     source.connect(processor);
                     processor.connect(audioContext.destination);

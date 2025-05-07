@@ -2,12 +2,14 @@ import collections
 import json
 import logging
 import time
+import os
 from pathlib import Path
 
 import numpy as np
 import torch
 import uvicorn
 import webrtcvad
+import faster_whisper
 from fastapi import FastAPI, WebSocket
 from faster_whisper import WhisperModel
 from sentence_transformers import SentenceTransformer
@@ -31,11 +33,16 @@ MODELS_PATH = Path("models")
 if not MODELS_PATH.exists():
     MODELS_PATH.mkdir()
 
+REMOTE_MODEL = "large-v3-turbo"
+
+model_path = str(MODELS_PATH.joinpath(REMOTE_MODEL).absolute())
+if not MODELS_PATH.joinpath(REMOTE_MODEL).exists():
+    faster_whisper.download_model(REMOTE_MODEL, model_path)
+
 DATA_PATH = Path("data")
 # LOCAL_MODEL_PATH = MODELS_PATH.joinpath(
 #     "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo"
 # )
-# REMOTE_MODEL = "large-v3-turbo"
 
 # is_downloaded_model = LOCAL_MODEL_PATH.exists()
 
@@ -45,10 +52,10 @@ logger.info(f"CUDA: {torch.cuda.is_available()}")
 
 # Initialize models
 model = WhisperModel(
-    "large-v3-turbo",  # MODELS_PATH.joinpath("models--mobiuslabsgmbh--faster-whisper-large-v3-turbo"),
+    model_path,
     device="cuda",
     compute_type="float16",
-    download_root="models",
+    local_files_only=True,
 )
 vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
 
@@ -56,7 +63,19 @@ with open(DATA_PATH.joinpath("links.json"), "r", encoding="utf-8") as f:
     links_data = json.load(f)
 
 # Initialize the sentence transformer model (multilingual for Russian support)
-model_embed = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+model_embed_name = "paraphrase-multilingual-MiniLM-L12-v2"
+model_embed_path = os.path.join("models", model_embed_name)
+
+# Проверяем, существует ли модель локально
+if not os.path.exists(model_embed_path):
+    print(f"Модель {model_embed_name} не найдена в {model_embed_path}. Скачиваем...")
+    # Скачиваем и сохраняем модель в указанную папку
+    model_embed = SentenceTransformer(model_embed_name)
+    model_embed.save(model_embed_path)
+else:
+    print(f"Загружаем модель из {model_embed_path}")
+    # Загружаем модель из локальной папки
+    model_embed = SentenceTransformer(model_embed_path)
 
 # Generate embeddings for all names in links.json
 names = [item["name"] for item in links_data]
@@ -139,7 +158,9 @@ class AudioProcessor:
             [np.frombuffer(d, dtype=np.int16) for d in self.audio_buffer]
         )
         segments, _ = model.transcribe(
-            full_audio.astype(np.float32) / 32768.0, language="ru", word_timestamps=True
+            full_audio.astype(np.float32) / 32768.0, 
+            language="ru", 
+            word_timestamps=True,
         )
         filtered_text = []
         keyword_found = False
@@ -150,6 +171,7 @@ class AudioProcessor:
                     filtered_text = []
                 if keyword_found:
                     filtered_text.append(word.word)
+        
         if len(filtered_text) > 2:
             command = " ".join(filtered_text)
             logger.info(f"Распознанный текст: {command}")
