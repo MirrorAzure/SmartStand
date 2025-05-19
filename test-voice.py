@@ -115,6 +115,25 @@ app = FastAPI()
 
 
 class AudioProcessor:
+
+    _keyword_alies = [
+        "шокин",
+        "шокен",
+        "shocking",
+        "shoking",
+        "shockin",
+        "shokin",
+        "shocken",
+        "shoken",
+    ]
+
+    def has_keyword(self, text):
+        for keyword in self._keyword_alies:
+            if keyword in text.lower():
+                logger.info(f"Found keyword: {keyword}")
+                return True
+        return False
+
     def __init__(self):
         self.prebuffer = collections.deque(
             maxlen=int(PREBUFFER_SECONDS * SAMPLE_RATE / (CHUNK_SIZE // 2))
@@ -159,19 +178,23 @@ class AudioProcessor:
         )
         segments, _ = model.transcribe(
             full_audio.astype(np.float32) / 32768.0, 
-            language="ru", 
+            #language="ru", 
             word_timestamps=True,
         )
+        full_text = []
         filtered_text = []
         keyword_found = False
         for segment in segments:
             for word in segment.words:
-                if KEYWORD in word.word.lower():
+                if self.has_keyword(word.word):
                     keyword_found = True
                     filtered_text = []
                 if keyword_found:
                     filtered_text.append(word.word)
+                full_text.append(word.word)
         
+        logger.info(full_text)
+
         if len(filtered_text) > 2:
             command = " ".join(filtered_text)
             logger.info(f"Распознанный текст: {command}")
