@@ -4,12 +4,14 @@ import logging
 import time
 import os
 from pathlib import Path
+from typing import List, Dict, Set, Tuple, Literal
 
 import numpy as np
 import torch
 import uvicorn
 import webrtcvad
 import faster_whisper
+from pydantic import BaseModel
 from fastapi import FastAPI, WebSocket
 from faster_whisper import WhisperModel
 from sentence_transformers import SentenceTransformer
@@ -27,6 +29,8 @@ VAD_AGGRESSIVENESS = 3
 PAUSE_THRESHOLD = 1.0
 KEYWORD = "шокин"
 PREBUFFER_SECONDS = 1.5
+languages = {"ru", "en"}
+language = "ru"
 
 MODELS_PATH = Path("models")
 
@@ -62,6 +66,48 @@ vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
 with open(DATA_PATH.joinpath("links.json"), "r", encoding="utf-8") as f:
     links_data = json.load(f)
 
+def set_language(new_language: str) -> None:
+    global language
+    language = new_language
+
+def transform_data(
+    input_data: List[Dict[str, str]],
+    langs: Set[str]={"ru", "en"}
+    ) -> Dict[str, List[Dict[str, str]]]:
+    """Преобразует список многоязычных записей в словарь с группировкой по языкам.
+    
+    Args:
+        input_data: Список словарей, где каждый содержит:
+            - ключи языков (напр., "ru", "en") со строковыми значениями
+            - ключ "link" с URL-адресом
+        langs: Множество поддерживаемых языков (по умолчанию {"ru", "en"})
+
+    Returns:
+        - Словарь, где:
+            - ключи — коды языков из `langs`
+            - значения — списки словарей формата {"name": текст, "link": URL}
+
+    Examples:
+        >>> data = [{"ru": "Привет", "en": "Hello", "link": "https://example.com"}]
+        >>> transform_data(data)
+        {
+            "ru": [{"name": "Привет", "link": "https://example.com"}],
+            "en": [{"name": "Hello", "link": "https://example.com"}]
+        }
+
+    Notes:
+        - Пропускает записи, где отсутствует язык из `langs`
+        - Сохраняет порядок элементов (Python 3.7+)
+    """
+    return {
+        lang: [{"name": item[lang], "link": item["link"]} 
+               for item in input_data 
+               if lang in item]
+        for lang in langs
+    }
+
+links_data = transform_data(links_data)
+
 # Initialize the sentence transformer model (multilingual for Russian support)
 model_embed_name = "paraphrase-multilingual-MiniLM-L12-v2"
 model_embed_path = os.path.join("models", model_embed_name)
@@ -78,12 +124,15 @@ else:
     model_embed = SentenceTransformer(model_embed_path)
 
 # Generate embeddings for all names in links.json
-names = [item["name"] for item in links_data]
+names = {}
+name_embeddings = {}
+for language in languages:
+    names[language] = [item["name"] for item in links_data[language]]
+    name_embeddings[language] = model_embed.encode(names[language])
 # names = ["шокин перейди на " + item["name"] for item in links_data]  # Как вариант костыля
-name_embeddings = model_embed.encode(names)
 
 
-def find_best_link(command):
+def find_best_link(command: str, language: str="ru") -> Tuple[str, float]:
     """
     Find the link from links.json that best matches the given command based on semantic similarity.
 
@@ -99,7 +148,7 @@ def find_best_link(command):
     command_embedding = model_embed.encode([command])
 
     # Calculate cosine similarity between command and all names
-    similarities = cosine_similarity(command_embedding, name_embeddings)[0]
+    similarities = cosine_similarity(command_embedding, name_embeddings[language])[0]
 
     # Find the index of the highest similarity score
     best_index = np.argmax(similarities)
@@ -108,10 +157,13 @@ def find_best_link(command):
     best_score = round(float(similarities[best_index]), 3)
 
     # Return the corresponding link and score
-    return links_data[best_index], best_score
+    return links_data[language][best_index], best_score
 
 
 app = FastAPI()
+
+class LanguageRequest(BaseModel):
+    language: Literal["ru", "en"]
 
 
 class AudioProcessor:
@@ -198,7 +250,7 @@ class AudioProcessor:
         if len(filtered_text) > 2:
             command = " ".join(filtered_text)
             logger.info(f"Распознанный текст: {command}")
-            payload, score = find_best_link(command)
+            payload, score = find_best_link(command, language=language)
             await websocket.send_json(
                 {"status": 1, "payload": payload, "transcript": command, "score": score}
             )
@@ -220,6 +272,15 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         logger.info("WebSocket connection closed")
 
+
+@app.post("/change_language")
+async def change_language(lang_data: LanguageRequest) -> bool:
+    """Изменяет язык пула ссылок.
+    
+    - **language**: Должен быть одним из: ru, en
+    """
+    set_language(lang_data.language)
+    return True
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

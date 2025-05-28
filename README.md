@@ -21,7 +21,8 @@ docker compose up -d
 ```json
 [
     {
-        "name": "Название ссылки",
+        "ru": "Название ссылки",
+        "en": "Link Name",
         "link": "Адрес ссылки"
     },
     ...
