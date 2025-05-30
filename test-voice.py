@@ -146,13 +146,14 @@ def find_best_link(command: str, language: str="ru") -> Tuple[str, float]:
     """
     # Generate embedding for the command
     command_embedding = model_embed.encode([command])
-    logger.info("Set Language: {language}")
+    logger.info(f"Текущий язык: {language}")
     # Calculate cosine similarity between command and all names
     try:
         similarities = cosine_similarity(command_embedding, name_embeddings[language])[0]
     except Exception as e:
         logger.error(f"Ошибка: {e}. Словарь с языком {language} пуст. Попытка обратиться к ru...")
-        similarities = cosine_similarity(command_embedding, name_embeddings["ru"])[0]
+        language = "ru"
+        similarities = cosine_similarity(command_embedding, name_embeddings[language])[0]
 
     # Find the index of the highest similarity score
     best_index = np.argmax(similarities)
