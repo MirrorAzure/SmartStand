@@ -29,6 +29,7 @@ VAD_AGGRESSIVENESS = 3
 PAUSE_THRESHOLD = 1.0
 KEYWORD = "шокин"
 PREBUFFER_SECONDS = 1.5
+MAX_RECORDING_SECONDS = 10.0
 languages = {"ru", "en"}
 language = "ru"
 
@@ -44,13 +45,6 @@ if not MODELS_PATH.joinpath(REMOTE_MODEL).exists():
     faster_whisper.download_model(REMOTE_MODEL, model_path)
 
 DATA_PATH = Path("data")
-# LOCAL_MODEL_PATH = MODELS_PATH.joinpath(
-#     "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo"
-# )
-
-# is_downloaded_model = LOCAL_MODEL_PATH.exists()
-
-# MODEL_PATH = LOCAL_MODEL_PATH if is_downloaded_model else REMOTE_MODEL
 
 logger.info(f"CUDA: {torch.cuda.is_available()}")
 
@@ -129,8 +123,6 @@ name_embeddings = {}
 for language in languages:
     names[language] = [item["name"] for item in links_data[language]]
     name_embeddings[language] = model_embed.encode(names[language])
-# names = ["шокин перейди на " + item["name"] for item in links_data]  # Как вариант костыля
-
 
 def find_best_link(command: str, language: str="ru") -> Tuple[str, float]:
     """
@@ -164,15 +156,12 @@ def find_best_link(command: str, language: str="ru") -> Tuple[str, float]:
     # Return the corresponding link and score
     return links_data[language][best_index], best_score
 
-
 app = FastAPI()
 
 class LanguageRequest(BaseModel):
     language: Literal["ru", "en"]
 
-
 class AudioProcessor:
-
     _keyword_alies = [
         "шокин",
         "шокен",
@@ -198,6 +187,7 @@ class AudioProcessor:
         self.audio_buffer = []
         self.is_recording = False
         self.last_audio_time = time.time()
+        self.recording_start_time = 0.0  # New variable to track recording start
 
     async def process_audio(self, data: bytes, websocket: WebSocket):
         audio_data = np.frombuffer(data, dtype=np.int16)
@@ -210,7 +200,11 @@ class AudioProcessor:
             self.audio_buffer.append(data)
             if rms > 0.005:
                 self.last_audio_time = time.time()
-            if time.time() - self.last_audio_time > PAUSE_THRESHOLD:
+            # Check if recording exceeds 10 seconds
+            if time.time() - self.recording_start_time > MAX_RECORDING_SECONDS:
+                logger.info(f"Максимальная длительность записи ({MAX_RECORDING_SECONDS} секунд) достигнута")
+                await self.stop_recording(websocket)
+            elif time.time() - self.last_audio_time > PAUSE_THRESHOLD:
                 await self.stop_recording(websocket)
         else:
             if rms > 0.005:
@@ -226,6 +220,7 @@ class AudioProcessor:
                     self.audio_buffer.append(data)
                     self.is_recording = True
                     self.last_audio_time = time.time()
+                    self.recording_start_time = time.time()  # Set recording start time
                     logger.info("Начало записи...")
 
     async def stop_recording(self, websocket: WebSocket):
@@ -235,7 +230,6 @@ class AudioProcessor:
         )
         segments, _ = model.transcribe(
             full_audio.astype(np.float32) / 32768.0, 
-            #language="ru", 
             word_timestamps=True,
         )
         full_text = []
@@ -263,7 +257,6 @@ class AudioProcessor:
             await websocket.send_json({"status": 0})
         self.audio_buffer = []
 
-
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -277,7 +270,6 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"WebSocket error: {e}")
     finally:
         logger.info("WebSocket connection closed")
-
 
 @app.post("/change_language")
 async def change_language(lang_data: LanguageRequest) -> bool:
